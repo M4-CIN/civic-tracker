@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Civic tracker</title>
+<style>
+:root{--bg:#f3f4f1;--card:#fff;--ink:#1c2321;--mute:#6b7571;--line:#dfe3df;--acc:#c8102e;--good:#16794a;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#121614;--card:#1c211f;--ink:#e9eeeb;--mute:#8d9792;--line:#2c3330;--acc:#ff4d63;--good:#4cc38a;--bad:#ff8077}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,sans-serif;padding:12px;max-width:640px;margin-inline:auto}
+h1{font-size:20px;margin:4px 0 2px}
+.sub{color:var(--mute);font-size:13px;margin-bottom:10px}
+.bar{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px}
+.chip,select{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:99px;padding:6px 12px;font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.car{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0}
+.car a{color:var(--ink);font-weight:600;text-decoration:none}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.price{font-size:22px;font-weight:700}
+.meta,.hist{color:var(--mute);font-size:13px}
+.tag{font-size:12px;font-weight:600;color:var(--acc)}
+.good{color:var(--good)}.bad{color:var(--bad)}
+button.i{border:0;background:none;color:var(--mute);font-size:18px;cursor:pointer;padding:2px 6px}
+button.i.on{color:var(--acc)}
+</style>
+</head>
+<body>
+<h1>Civic tracker</h1>
+<div class="sub" id="sub">Ładowanie…</div>
+<div class="bar" id="chips"></div>
+<div class="bar"><select id="sort">
+<option value="deal">Najlepsza okazja</option><option value="price">Cena rosnąco</option>
+<option value="km">Przebieg rosnąco</option><option value="days">Najdłużej na rynku</option>
+<option value="new">Najnowsze</option></select></div>
+<div id="list"></div>
+<script>
+const F=[["all","Aktywne"],["new","Nowe"],["price","Zmiana ceny"],["relisted","Ponownie"],["gone","Zniknęły"],["fav","★"]];
+let items=[],filter="all";
+const ls={get(k){try{return JSON.parse(localStorage.getItem(k))||[]}catch(e){return[]}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let favs=ls.get("fav"),hid=ls.get("hid");
+const zl=n=>n==null?"–":n.toLocaleString("pl-PL")+" zł";
+const day=s=>Math.round((new Date()-new Date(s))/864e5);
+
+function fit(rows){
+  if(rows.length<6)return null;
+  const A=[[0,0,0],[0,0,0],[0,0,0]],b=[0,0,0];
+  rows.forEach(([m,y,p])=>{const x=[1,m,y];for(let i=0;i<3;i++){b[i]+=x[i]*p;for(let j=0;j<3;j++)A[i][j]+=x[i]*x[j]}});
+  for(let i=0;i<3;i++){let k=i;for(let r=i+1;r<3;r++)if(Math.abs(A[r][i])>Math.abs(A[k][i]))k=r;
+    [A[i],A[k]]=[A[k],A[i]];[b[i],b[k]]=[b[k],b[i]];
+    if(Math.abs(A[i][i])<1e-9)return null;
+    for(let r=i+1;r<3;r++){const f=A[r][i]/A[i][i];for(let c=i;c<3;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i]}}
+  const w=[0,0,0];for(let i=2;i>=0;i--){let s=b[i];for(let j=i+1;j<3;j++)s-=A[i][j]*w[j];w[i]=s/A[i][i]}
+  return w;
+}
+
+fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{
+  items=Object.values(d.items);
+  const act=items.filter(l=>l.active&&l.price&&l.mileage&&l.year);
+  const w=fit(act.map(l=>[l.mileage/1e4,l.year-2018,l.price]));
+  items.forEach(l=>{
+    l.days=day(l.first_seen);
+    l.deal=w&&l.price&&l.mileage&&l.year?Math.round(w[0]+w[1]*l.mileage/1e4+w[2]*(l.year-2018))-l.price:null;
+    l.recent=day(l.tag_date||l.first_seen)<=1;
+  });
+  document.getElementById("sub").textContent="Aktualizacja: "+d.updated+" · aktywne: "+items.filter(l=>l.active).length;
+  render();
+}).catch(()=>{document.getElementById("sub").textContent="Brak data.json. Uruchom workflow w Actions."});
+
+function render(){
+  document.getElementById("chips").innerHTML=F.map(([k,t])=>`<button class="chip ${k==filter?"on":""}" data-k="${k}">${t}</button>`).join("");
+  let v=items.filter(l=>!hid.includes(l.id));
+  if(filter=="gone")v=v.filter(l=>!l.active);
+  else{v=v.filter(l=>l.active);
+    if(filter=="fav")v=v.filter(l=>favs.includes(l.id));
+    else if(filter!="all")v=v.filter(l=>l.tag==filter&&l.recent)}
+  const s=document.getElementById("sort").value;
+  const key={deal:l=>-(l.deal??-1e9),price:l=>l.price??1e9,km:l=>l.mileage??1e9,days:l=>-l.days,new:l=>l.days}[s];
+  v.sort((a,b)=>key(a)-key(b));
+  document.getElementById("list").innerHTML=v.map(card).join("")||'<p class="meta">Nic tu nie ma.</p>';
+}
+
+function card(l){
+  const h=l.history,prev=h.length>1?h[h.length-2][1]:null,d=prev!=null&&l.price!=null?l.price-prev:0;
+  const tag={new:"Nowe",price:"Zmiana ceny",relisted:"Wystawione ponownie"}[l.tag];
+  const deal=l.deal==null?"":`<span class="${l.deal>0?"good":"bad"}">${l.deal>0?"−":"+"}${zl(Math.abs(Math.round(l.deal/100)*100))} vs rynek</span>`;
+  return `<div class="car"><div class="row"><span class="price">${zl(l.price)}
+    ${d?`<span class="${d<0?"good":"bad"}" style="font-size:14px">${d<0?"↓":"↑"} ${zl(Math.abs(d))}</span>`:""}</span>
+    <span><button class="i ${favs.includes(l.id)?"on":""}" data-f="${l.id}">★</button><button class="i" data-h="${l.id}">✕</button></span></div>
+    <a href="${l.url}" target="_blank" rel="noopener">${l.title||"Honda Civic"}</a>
+    <div class="meta">${l.year||"?"} · ${l.mileage?l.mileage.toLocaleString("pl-PL")+" km":"?"} · ${l.engine||""} cm³ · ${l.city||""}</div>
+    <div class="meta">${l.active?l.days+" dni na rynku":"zniknęło "+l.gone_date} ${deal}</div>
+    ${tag&&l.recent?`<div class="tag">${tag}${l.relisted_from?" (poprzednie ID "+l.relisted_from+")":""}</div>`:""}
+    ${h.length>1?`<div class="hist">Historia: ${h.map(x=>x[0].slice(5)+" "+(x[1]/1000)+"k").join(" → ")}</div>`:""}</div>`;
+}
+
+document.addEventListener("click",e=>{
+  const t=e.target,tog=(a,id)=>a.includes(id)?a.filter(x=>x!=id):[...a,id];
+  if(t.dataset.k)filter=t.dataset.k;
+  else if(t.dataset.f){favs=tog(favs,t.dataset.f);ls.set("fav",favs)}
+  else if(t.dataset.h){hid=tog(hid,t.dataset.h);ls.set("hid",hid)}
+  else return;
+  render();
+});
+document.getElementById("sort").onchange=render;
+</script>
+</body>
+</html>
