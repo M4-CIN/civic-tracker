@@ -15,6 +15,7 @@ h1{font-size:20px;margin:4px 0 2px}
 .chip,select{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:99px;padding:6px 12px;font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
 .chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .car{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0}
+.car img{width:100%;height:170px;object-fit:cover;border-radius:6px;margin-bottom:8px;display:block}
 .car a{color:var(--ink);font-weight:600;text-decoration:none}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .price{font-size:22px;font-weight:700}
@@ -23,11 +24,13 @@ h1{font-size:20px;margin:4px 0 2px}
 .good{color:var(--good)}.bad{color:var(--bad)}
 button.i{border:0;background:none;color:var(--mute);font-size:18px;cursor:pointer;padding:2px 6px}
 button.i.on{color:var(--acc)}
+.vin{user-select:all}
 </style>
 </head>
 <body>
 <h1>Civic tracker</h1>
 <div class="sub" id="sub">Ładowanie…</div>
+<div class="sub" id="eff"></div>
 <div class="bar" id="chips"></div>
 <div class="bar"><select id="sort">
 <option value="deal">Najlepsza okazja</option><option value="price">Cena rosnąco</option>
@@ -42,35 +45,45 @@ let favs=ls.get("fav"),hid=ls.get("hid");
 const zl=n=>n==null?"–":n.toLocaleString("pl-PL")+" zł";
 const day=s=>Math.round((new Date()-new Date(s))/864e5);
 
-function fit(rows){
-  if(rows.length<6)return null;
-  const A=[[0,0,0],[0,0,0],[0,0,0]],b=[0,0,0];
-  rows.forEach(([m,y,p])=>{const x=[1,m,y];for(let i=0;i<3;i++){b[i]+=x[i]*p;for(let j=0;j<3;j++)A[i][j]+=x[i]*x[j]}});
-  for(let i=0;i<3;i++){let k=i;for(let r=i+1;r<3;r++)if(Math.abs(A[r][i])>Math.abs(A[k][i]))k=r;
-    [A[i],A[k]]=[A[k],A[i]];[b[i],b[k]]=[b[k],b[i]];
+function solve(X,y){
+  const k=X[0].length,A=Array.from({length:k},()=>Array(k).fill(0)),b=Array(k).fill(0);
+  X.forEach((x,n)=>{for(let i=0;i<k;i++){b[i]+=x[i]*y[n];for(let j=0;j<k;j++)A[i][j]+=x[i]*x[j]}});
+  for(let i=1;i<k;i++)A[i][i]+=0.5;
+  for(let i=0;i<k;i++){let m=i;for(let r=i+1;r<k;r++)if(Math.abs(A[r][i])>Math.abs(A[m][i]))m=r;
+    [A[i],A[m]]=[A[m],A[i]];[b[i],b[m]]=[b[m],b[i]];
     if(Math.abs(A[i][i])<1e-9)return null;
-    for(let r=i+1;r<3;r++){const f=A[r][i]/A[i][i];for(let c=i;c<3;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i]}}
-  const w=[0,0,0];for(let i=2;i>=0;i--){let s=b[i];for(let j=i+1;j<3;j++)s-=A[i][j]*w[j];w[i]=s/A[i][i]}
+    for(let r=i+1;r<k;r++){const f=A[r][i]/A[i][i];for(let c=i;c<k;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i]}}
+  const w=Array(k).fill(0);for(let i=k-1;i>=0;i--){let s=b[i];for(let j=i+1;j<k;j++)s-=A[i][j]*w[j];w[i]=s/A[i][i]}
   return w;
+}
+function model(act){
+  const cnt={};act.forEach(l=>cnt[l.trim]=(cnt[l.trim]||0)+1);
+  const base=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  const tr=Object.keys(cnt).filter(t=>t!=base&&cnt[t]>=3);
+  if(act.length<Math.max(6,2*(3+tr.length)))return null;
+  const row=l=>[1,l.mileage/1e4,l.year-2018,...tr.map(t=>+(l.trim==t))];
+  const w=solve(act.map(row),act.map(l=>l.price));
+  return w&&{pred:l=>row(l).reduce((s,v,i)=>s+v*w[i],0),eff:tr.map((t,i)=>[t,w[3+i]]),base};
 }
 
 fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{
-  items=Object.values(d.items);
+  items=Object.values(d.items);items.forEach(l=>l.trim=l.trim||"?");
   const act=items.filter(l=>l.active&&l.price&&l.mileage&&l.year);
-  const w=fit(act.map(l=>[l.mileage/1e4,l.year-2018,l.price]));
+  const M=model(act);
   items.forEach(l=>{
-    l.days=day(l.first_seen);
-    l.deal=w&&l.price&&l.mileage&&l.year?Math.round(w[0]+w[1]*l.mileage/1e4+w[2]*(l.year-2018))-l.price:null;
+    l.days=day(l.since||l.first_seen);
+    l.deal=M&&l.price&&l.mileage&&l.year?Math.round(M.pred(l))-l.price:null;
     l.recent=day(l.tag_date||l.first_seen)<=1;
   });
   document.getElementById("sub").textContent="Aktualizacja: "+d.updated+" · aktywne: "+items.filter(l=>l.active).length;
+  if(M&&M.eff.length)document.getElementById("eff").textContent="Wersje vs "+M.base+": "+M.eff.map(([t,v])=>t+" "+(v>=0?"+":"−")+zl(Math.abs(Math.round(v/100)*100))).join(", ");
   render();
 }).catch(()=>{document.getElementById("sub").textContent="Brak data.json. Uruchom workflow w Actions."});
 
 function render(){
   document.getElementById("chips").innerHTML=F.map(([k,t])=>`<button class="chip ${k==filter?"on":""}" data-k="${k}">${t}</button>`).join("");
   let v=items.filter(l=>!hid.includes(l.id));
-  if(filter=="gone")v=v.filter(l=>!l.active);
+  if(filter=="gone")v=v.filter(l=>!l.active&&!l.relisted_as);
   else{v=v.filter(l=>l.active);
     if(filter=="fav")v=v.filter(l=>favs.includes(l.id));
     else if(filter!="all")v=v.filter(l=>l.tag==filter&&l.recent)}
@@ -84,13 +97,14 @@ function card(l){
   const h=l.history,prev=h.length>1?h[h.length-2][1]:null,d=prev!=null&&l.price!=null?l.price-prev:0;
   const tag={new:"Nowe",price:"Zmiana ceny",relisted:"Wystawione ponownie"}[l.tag];
   const deal=l.deal==null?"":`<span class="${l.deal>0?"good":"bad"}">${l.deal>0?"−":"+"}${zl(Math.abs(Math.round(l.deal/100)*100))} vs rynek</span>`;
-  return `<div class="car"><div class="row"><span class="price">${zl(l.price)}
+  return `<div class="car">${l.img?`<img src="${l.img}" loading="lazy" referrerpolicy="no-referrer" alt="">`:""}<div class="row"><span class="price">${zl(l.price)}
     ${d?`<span class="${d<0?"good":"bad"}" style="font-size:14px">${d<0?"↓":"↑"} ${zl(Math.abs(d))}</span>`:""}</span>
     <span><button class="i ${favs.includes(l.id)?"on":""}" data-f="${l.id}">★</button><button class="i" data-h="${l.id}">✕</button></span></div>
     <a href="${l.url}" target="_blank" rel="noopener">${l.title||"Honda Civic"}</a>
     <div class="meta">${l.year||"?"} · ${l.mileage?l.mileage.toLocaleString("pl-PL")+" km":"?"} · ${l.engine||""} cm³ · ${l.city||""}</div>
+    <div class="meta">${l.trim!="?"?l.trim+(l.trim_src=="opis"?" (z opisu)":""):"wersja nieznana"}${l.version?" ("+l.version+")":""} · VIN: <span class="vin">${l.vin||"brak"}</span></div>
     <div class="meta">${l.active?l.days+" dni na rynku":"zniknęło "+l.gone_date} ${deal}</div>
-    ${tag&&l.recent?`<div class="tag">${tag}${l.relisted_from?" (poprzednie ID "+l.relisted_from+")":""}</div>`:""}
+    ${tag&&l.recent?`<div class="tag">${tag}${l.relisted_from?" (poprzednie ID "+l.relisted_from+", dopasowano po "+(l.relisted_by||"VIN")+")":""}</div>`:""}
     ${h.length>1?`<div class="hist">Historia: ${h.map(x=>x[0].slice(5)+" "+(x[1]/1000)+"k").join(" → ")}</div>`:""}</div>`;
 }
 
